@@ -39,19 +39,16 @@ st.markdown("""
             unsafe_allow_html=True)
 
 # Logo and Title
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    st.image("attached_assets/soilsense_logo.png", width=300)
+col1, col2, col3 = st.columns([1, 1, 1])
+with col1:
+    st.image("attached_assets/soilsense_logo.png", width=250)
+with col3:
+    st.image("attached_assets/SoilIncubationChamber.png", width=250)
 
 st.markdown('<h1 class="main-header">Soil Sense</h1>', unsafe_allow_html=True)
 st.markdown(
     '<p class="sub-header">🌱 Agricultural Sensor Data Monitoring Platform</p>',
     unsafe_allow_html=True)
-
-# Data source section
-st.markdown("---")
-st.markdown('<h3 style="color: #2E7D32;">📊 Data Source Selection</h3>',
-            unsafe_allow_html=True)
 
 
 # Get available experiment files
@@ -65,9 +62,9 @@ def get_available_experiments():
     # Try different possible paths (local vs cloud environment)
 
     possible_paths = [
+        #"C:/Users/USER001/Desktop/SoilSense/attached_assets",  # Your local path
         "./attached_assets",  # Cloud/Git environment
         "attached_assets",  # Alternative cloud path
-        #"C:/Users/USER001/Desktop/SoilSense/attached_assets",  # Your local path
     ]
 
     assets_path = None
@@ -105,22 +102,140 @@ def get_available_experiments():
     return experiments
 
 
-# Get available experiments
-available_experiments = get_available_experiments()
 
-if available_experiments:
-    selected_experiment = st.selectbox("Choose data source:",
-                                       available_experiments,
-                                       index=0)
-else:
-    st.error(
-        "No experiment files found. Please ensure Experiment1.txt through Experiment7.txt are in the attached_assets folder."
+# Sidebar for experiment selection and data filtering
+with st.sidebar:
+    st.markdown("### 📊 Data Source")
+
+    # Get available experiments
+    available_experiments = get_available_experiments()
+
+    if available_experiments:
+        selected_experiment = st.selectbox("Choose data source:",
+                                           available_experiments,
+                                           index=0,
+                                           key="experiment_selector")
+    else:
+        st.error(
+            "No experiment files found. Please ensure Experiment1.txt through Experiment7.txt are in the attached_assets folder."
+        )
+        selected_experiment = None
+
+    st.markdown("---")
+    st.markdown("### 🔍 Data Filtering")
+
+    # Data filtering options
+    filter_option = st.selectbox(
+        "Select filter type:",
+        [
+            "No filter",
+            "Remove zero values",
+            "Remove extreme outliers",
+            "Remove sudden spikes",
+        ],
+        index=0,
+        help="Choose how to clean the sensor data",
+        key="filter_selector"
     )
-    selected_experiment = None
 
-uploaded_file = None
+    # Additional filter parameters based on selection
+    filter_params = {}
+
+    if filter_option == "Remove extreme outliers":
+        filter_params['outlier_method'] = st.selectbox(
+            "Outlier detection method:",
+            ["Statistical (3σ)", "Interquartile Range (IQR)", "Percentile (1%-99%)"],
+            index=0,
+            key="outlier_method_selector"
+        )
+
+    elif filter_option == "Remove sudden spikes":
+        filter_params['spike_threshold'] = st.slider(
+            "Spike sensitivity (% change):",
+            min_value=50, max_value=300, value=150,
+            help="Remove values that change more than X% from previous reading",
+            key="spike_threshold_slider"
+        )
 
 
+
+    if filter_option != "No filter":
+        st.markdown("**Handling method for individual sensor issues:**")
+        filter_params['replacement_method'] = st.radio(
+            "When a single sensor has bad data:",
+            ["Fill with blank values", "Replace with averages"],
+            index=0,
+            key="replacement_method_radio",
+            help="Choose how to handle bad data from individual sensors"
+        )
+
+
+
+# Data filtering function
+def apply_data_filter(df, filter_option, filter_params):
+    """Apply selected data filter to individual sensors, preserving rows"""
+    if df.empty or filter_option == "No filter":
+        return df
+
+    filtered_df = df.copy()
+    sensor_columns = [col for col in df.columns if col != 'timestamp']
+    replacement_method = filter_params.get('replacement_method', 'Fill with blank values')
+    replaced_count = 0
+
+    if filter_option == "Remove zero values":
+        # Handle zero values in individual sensors
+        for col in sensor_columns:
+            mask = filtered_df[col] == 0
+            if replacement_method == "Fill with blank values":
+                filtered_df.loc[mask, col] = None
+            else:  # Replace with averages
+                avg_value = filtered_df[col][~mask].mean()
+                filtered_df.loc[mask, col] = avg_value
+
+    elif filter_option == "Remove extreme outliers":
+        method = filter_params.get('outlier_method', "Statistical (3σ)")
+
+        for col in sensor_columns:
+            if method == "Statistical (3σ)":
+                μ, σ = df[col].mean(), df[col].std()
+                # mask of outliers beyond ±3σ
+                mask = (df[col] > μ + 3 * σ) | (df[col] < μ - 3 * σ)
+                replaced_count += mask.sum()
+                # set just those values to NaN
+                filtered_df.loc[mask, col] = np.nan
+
+            elif method == "Interquartile Range (IQR)":
+                q1, q3 = df[col].quantile([0.25, 0.75])
+                iqr = q3 - q1
+                lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+                mask = (df[col] > upper) | (df[col] < lower)
+                replaced_count += mask.sum()
+                filtered_df.loc[mask, col] = np.nan
+
+            elif method == "Percentile (1%-99%)":
+                lower = df[col].quantile(0.01)
+                upper = df[col].quantile(0.99)
+                mask = (df[col] < lower) | (df[col] > upper)
+                # count how many values we’re blanking
+                replaced_count += mask.sum()
+                # set just those values to NaN
+                filtered_df.loc[mask, col] = np.nan
+
+    elif filter_option == "Remove sudden spikes":
+        spike_threshold = filter_params.get('spike_threshold', 150) / 100.0
+
+        for col in sensor_columns:
+            # Pseudocode replacement:
+            mask = filtered_df[col].pct_change().abs() > spike_threshold
+            replaced_count += mask.sum()
+            if replacement_method == "Fill with blank values":
+                filtered_df.loc[mask, col] = np.nan
+            else:
+                avg = filtered_df[col][~mask].mean()
+                filtered_df.loc[mask, col] = avg
+
+
+    return filtered_df
 # Function to parse experiment TXT files with correct column structure
 @st.cache_data
 def parse_experiment_file(file_path):
@@ -187,11 +302,6 @@ def parse_experiment_file(file_path):
         columns = columns[:max_cols]
 
         df = pd.DataFrame(data_rows, columns=columns)
-
-        # Filter out rows with all zero sensor values (inactive periods)
-        if len(df) > 0:
-            df = df[df.iloc[:, 1:].sum(axis=1)
-                    > 0]  # Remove rows where all sensor values are 0
 
         return df
 
@@ -336,22 +446,93 @@ def create_sensor_plots(df):
     return plots
 
 
+def create_dual_axis_plot(df, chamber='A'):
+    """Create a dual-axis plot with CO2 and O2 for selected chamber"""
+    if df.empty:
+        return None
+
+    # Find CO2 and O2 sensors for the selected chamber
+    co2_sensor = f'CO2SCD30{chamber} [ppm]'
+    o2_sensor = f'oxygenDa_{chamber} [%Vol]'
+
+    # Check if both sensors exist
+    if co2_sensor not in df.columns or o2_sensor not in df.columns:
+        return None
+
+    # Create figure with secondary y-axis
+    fig = go.Figure()
+
+    # Add CO2 trace (left y-axis)
+    fig.add_trace(
+        go.Scatter(
+            x=df['timestamp'],
+            y=df[co2_sensor],
+            mode='lines',
+            name=f'CO2 Chamber {chamber}',
+            line=dict(color='#2E7D32', width=3),
+            yaxis='y'
+        )
+    )
+
+    # Add O2 trace (right y-axis)
+    fig.add_trace(
+        go.Scatter(
+            x=df['timestamp'],
+            y=df[o2_sensor],
+            mode='lines',
+            name=f'O2 Chamber {chamber}',
+            line=dict(color='#1E88E5', width=3),
+            yaxis='y2'
+        )
+    )
+
+    # Update layout with dual y-axes
+    fig.update_layout(
+        title=f"🌱 CO2 vs O2 Levels - Chamber {chamber}",
+        xaxis_title="Time",
+        yaxis=dict(
+            title="CO2 (ppm)",
+            title_font=dict(color='#2E7D32'),
+            tickfont=dict(color='#2E7D32'),
+            side='left'
+        ),
+        yaxis2=dict(
+            title="O2 (%Vol)",
+            title_font=dict(color='#1E88E5'),
+            tickfont=dict(color='#1E88E5'),
+            anchor='x',
+            overlaying='y',
+            side='right'
+        ),
+        hovermode='x unified',
+        height=400,
+        template='plotly_white'
+    )
+
+    return fig
+
 # Create correlation heatmap
 def create_correlation_heatmap(df, columns):
     """Create a correlation heatmap for selected sensors"""
+    columns = [c for c in columns if not c.endswith("_pct_change")]
     if len(columns) < 2:
         return None
 
     corr_df = df[columns].corr()
+    # Format correlation values to 4 decimal places
+    text_values = corr_df.round(4).values
 
     fig = px.imshow(corr_df,
-                    text_auto=True,
+                    text_auto=False,
                     color_continuous_scale='RdBu_r',
                     zmin=-1,
                     zmax=1,
                     title="Sensor Correlation Heatmap")
 
+    # Add custom text with 4 decimal places
+    fig.update_traces(text=text_values, texttemplate="%{text}", textfont_size=16)
     fig.update_layout(height=400)
+
     return fig
 
 
@@ -451,12 +632,37 @@ def check_sensor_thresholds(df, thresholds):
 
 
 # Load data based on user selection
-df = load_experiment_data(
+df_raw = load_experiment_data(
     selected_experiment) if selected_experiment else pd.DataFrame()
 
-if not df.empty:
-    # Display data source info
-    st.success(f"✅ Data loaded from: {selected_experiment}")
+if not df_raw.empty:
+    # Apply data filtering
+    df = apply_data_filter(df_raw, filter_option, filter_params)
+
+    # Remove any temporary pct_change columns so they don't get plotted
+    df = df.drop(
+        columns=[c for c in df.columns if c.endswith("_pct_change")],
+        errors="ignore"
+    )
+
+    # Display data source info with filtering status
+    if filter_option == "No filter":
+        st.success(f"✅ Data loaded from: {selected_experiment}")
+    else:
+        st.success(f"✅ Data loaded from: {selected_experiment}")
+        # Count individual sensor values that were filtered
+        sensor_columns = [col for col in df_raw.columns if col != 'timestamp']
+        total_values = len(df_raw) * len(sensor_columns)
+        filtered_values = 0
+
+        for col in sensor_columns:
+            filtered_values += df[col].isna().sum()
+
+        replacement_method = filter_params.get('replacement_method', 'Fill with blank values')
+        method_text = "filled with blanks" if replacement_method == "Fill with blank values" else "replaced with averages"
+
+        st.info(
+            f"🔍 Filter applied: '{filter_option}' - {filtered_values} sensor values {method_text} ({filtered_values / total_values * 100:.1f}%)")
 
     # Main application interface
     st.markdown("---")
@@ -464,14 +670,14 @@ if not df.empty:
                 unsafe_allow_html=True)
 
     # Display data info
-    st.write(f"📊 **Records**: {len(df)}")
+    st.write(f"📊 **Records**: {len(df)} (Original: {len(df_raw)})")
     if 'timestamp' in df.columns and len(df) > 0:
         st.write(
             f"⏰ **Time Range**: {df['timestamp'].min().strftime('%Y-%m-%d %H:%M')} to {df['timestamp'].max().strftime('%Y-%m-%d %H:%M')}"
         )
 
     # Get sensor columns (all except timestamp)
-    sensor_columns = [col for col in df.columns if col != 'timestamp']
+    sensor_columns = [col for col in df.columns if col != 'timestamp' and not col.endswith("_pct_change")]
 
     # Create 4 tabs for different visualizations
     viz_tab1, viz_tab2, viz_tab3, alert_tab = st.tabs(
@@ -518,9 +724,29 @@ if not df.empty:
                 # Display each plot type
                 for plot_title, fig in plots:
                     st.subheader(plot_title)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=f"sensor_plot_{plot_title}")
 
-                # Show data summary for filtered range
+
+                # ADD THE NEW DUAL-AXIS SECTION HERE:
+                st.subheader("CO2 vs O2 Dual-Axis Analysis")
+
+                # Chamber selection
+                available_chambers = ['A', 'B', 'C', 'D']
+                selected_chamber = st.selectbox(
+                    "Select chamber for CO2 vs O2 comparison:",
+                    available_chambers,
+                    index=0,
+                    key="dual_axis_chamber"
+                )
+
+                # Create and display dual-axis plot
+                dual_plot = create_dual_axis_plot(filtered_df, selected_chamber)
+                if dual_plot:
+                    st.plotly_chart(dual_plot, use_container_width=True, key=f"dual_axis_{selected_chamber}")
+                else:
+                    st.warning(f"No CO2 or O2 data available for Chamber {selected_chamber}")
+
+                # Show data summary for filtered range (existing code)
                 st.write(
                     f"📊 Showing {len(filtered_df)} data points from {start_time} to {end_time}"
                 )
@@ -746,14 +972,6 @@ if not df.empty:
                                    name='Actual Data',
                                    marker=dict(color='blue', size=4)))
 
-                    # Regression line
-                    fig_reg.add_trace(
-                        go.Scatter(x=df_reg['timestamp'],
-                                   y=y_pred,
-                                   mode='lines',
-                                   name=f'{regression_type} Regression',
-                                   line=dict(color='red', width=2)))
-
                     # Add prediction point
                     future_time = df_reg['timestamp'].iloc[-1] + pd.Timedelta(hours=prediction_hours)
                     fig_reg.add_trace(
@@ -762,6 +980,18 @@ if not df.empty:
                                    mode='markers',
                                    name=f'Prediction ({prediction_hours}h)',
                                    marker=dict(color='orange', size=12, symbol='star'))
+                    )
+                    # Extended regression line through prediction
+                    timestamps_ext = list(df_reg['timestamp']) + [future_time]
+                    y_pred_ext = list(y_pred) + [future_pred]
+                    fig_reg.add_trace(
+                        go.Scatter(
+                            x=timestamps_ext,
+                            y=y_pred_ext,
+                            mode='lines',
+                            name=f'{regression_type} Regression',
+                            line=dict(color='red', width=2)
+                        )
                     )
 
                     # Add 40,000 ppm limit line
