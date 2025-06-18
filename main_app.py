@@ -1,3 +1,6 @@
+import shutil
+import smtplib
+from email.message import EmailMessage
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,6 +8,56 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import os
+import tempfile
+import gdown
+import pandas as pd
+import streamlit as st
+
+# 1. Your public Drive folder ID
+FOLDER_ID = "1cneVPzSjULMwdCw5km9Jtj1kyij9yvcI"
+
+@st.cache_data
+def _ensure_folder_downloaded(folder_id: str) -> str:
+    """Download all .txt files in the public Drive folder to a temp dir."""
+    tmp_dir = os.path.join(tempfile.gettempdir(), f"soilsense_{folder_id}")
+    if not os.path.isdir(tmp_dir):
+        os.makedirs(tmp_dir, exist_ok=True)
+        # downloads every file in that folder
+        gdown.download_folder(id=folder_id, output=tmp_dir, use_cookies=False)
+    return tmp_dir
+
+def get_available_experiments() -> list[str]:
+    data_dir = _ensure_folder_downloaded(FOLDER_ID)
+    files = [f for f in os.listdir(data_dir) if f.lower().endswith(".txt")]
+    files.sort(key=lambda fn: int("".join(filter(str.isdigit, fn))), reverse=True)
+    return [os.path.splitext(f)[0] for f in files]
+
+@st.cache_data
+def load_experiment_data(experiment_name: str) -> pd.DataFrame:
+    data_dir = _ensure_folder_downloaded(FOLDER_ID)
+    path = os.path.join(data_dir, f"{experiment_name}.txt")
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    return parse_experiment_file(path)  # your existing parser
+
+def send_email_alert(subject: str, body: str, recipients: list[str] = None):
+    """
+    Send an email via SMTP. If `recipients` is provided, use it;
+    otherwise fall back to the list in st.secrets["email"]["to"].
+    """
+    cfg = st.secrets["email"]
+    to_addrs = recipients or cfg["to"]
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"]    = cfg["from"]
+    msg["To"]      = ", ".join(to_addrs)
+    msg.set_content(body)
+
+    with smtplib.SMTP(cfg["smtp_server"], cfg["smtp_port"]) as server:
+        server.starttls()
+        server.login(cfg["username"], cfg["password"])
+        server.send_message(msg)
 
 # Set page configuration
 st.set_page_config(page_title="Soil Sense", page_icon="🌱", layout="wide")
@@ -38,6 +91,15 @@ st.markdown("""
 """,
             unsafe_allow_html=True)
 
+# Sidebar “Refresh” button
+if st.sidebar.button("🔄 Refresh experiments"):
+    # 1. Remove the entire downloaded folder
+    tmp_dir = os.path.join(tempfile.gettempdir(), f"soilsense_{FOLDER_ID}")
+    if os.path.isdir(tmp_dir):
+        shutil.rmtree(tmp_dir)
+    # 2. Clear Streamlit’s cache
+    st.cache_data.clear()
+
 # Logo and Title
 col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
@@ -50,57 +112,57 @@ st.markdown(
     '<p class="sub-header">🌱 Agricultural Sensor Data Monitoring Platform</p>',
     unsafe_allow_html=True)
 
-
-# Get available experiment files
-def get_available_experiments():
-    """Get list of available experiment files"""
-    experiments = []
-
-    # Check for available TXT files in attached_assets
-    import os
-
-    # Try different possible paths (local vs cloud environment)
-
-    possible_paths = [
-        #"C:/Users/USER001/Desktop/SoilSense/attached_assets",  # Your local path
-        "./attached_assets",  # Cloud/Git environment
-        "attached_assets",  # Alternative cloud path
-    ]
-
-    assets_path = None
-    for path in possible_paths:
-        if os.path.exists(path):
-            assets_path = path
-            break
-
-    if assets_path:
-        # Look for Experiment files specifically (Experiment1 to Experiment7)
-        for i in range(1, 8):  # Experiment1 through Experiment7
-            filename_txt = f"Experiment{i}.txt"
-            filename_TXT = f"Experiment{i}.TXT"
-
-            file_path = None
-            if os.path.exists(os.path.join(assets_path, filename_txt)):
-                file_path = os.path.join(assets_path, filename_txt)
-            elif os.path.exists(os.path.join(assets_path, filename_TXT)):
-                file_path = os.path.join(assets_path, filename_TXT)
-
-            if file_path:
-                try:
-                    with open(file_path, 'r') as f:
-                        content = f.read().strip()
-                        # Check if file has content and contains timestamp data
-                        if content and ('/' in content or ':' in content):
-                            experiments.append(f"Experiment{i}")
-                except:
-                    continue
-
-    # Sort from newest to oldest (7, 6, 5, 4, 3, 2, 1)
-    experiments.sort(key=lambda x: int(x.replace('Experiment', '')),
-                     reverse=True)
-
-    return experiments
-
+#
+# # Get available experiment files
+# def get_available_experiments():
+#     """Get list of available experiment files"""
+#     experiments = []
+#
+#     # Check for available TXT files in attached_assets
+#     import os
+#
+#     # Try different possible paths (local vs cloud environment)
+#
+#     possible_paths = [
+#         #"C:/Users/USER001/Desktop/SoilSense/attached_assets",  # Your local path
+#         "./attached_assets",  # Cloud/Git environment
+#         "attached_assets",  # Alternative cloud path
+#     ]
+#
+#     assets_path = None
+#     for path in possible_paths:
+#         if os.path.exists(path):
+#             assets_path = path
+#             break
+#
+#     if assets_path:
+#         # Look for Experiment files specifically (Experiment1 to Experiment7)
+#         for i in range(1, 8):  # Experiment1 through Experiment7
+#             filename_txt = f"Experiment{i}.txt"
+#             filename_TXT = f"Experiment{i}.TXT"
+#
+#             file_path = None
+#             if os.path.exists(os.path.join(assets_path, filename_txt)):
+#                 file_path = os.path.join(assets_path, filename_txt)
+#             elif os.path.exists(os.path.join(assets_path, filename_TXT)):
+#                 file_path = os.path.join(assets_path, filename_TXT)
+#
+#             if file_path:
+#                 try:
+#                     with open(file_path, 'r') as f:
+#                         content = f.read().strip()
+#                         # Check if file has content and contains timestamp data
+#                         if content and ('/' in content or ':' in content):
+#                             experiments.append(f"Experiment{i}")
+#                 except:
+#                     continue
+#
+#     # Sort from newest to oldest (7, 6, 5, 4, 3, 2, 1)
+#     experiments.sort(key=lambda x: int(x.replace('Experiment', '')),
+#                      reverse=True)
+#
+#     return experiments
+#
 
 
 # Sidebar for experiment selection and data filtering
@@ -1218,12 +1280,6 @@ if not df_raw.empty:
                 user_email = st.text_input("Your email address:",
                                            placeholder="example@email.com")
 
-        with col2:
-            st.subheader("📱 SMS Notifications")
-            sms_enabled = st.checkbox("Enable SMS alerts", key="sms_alerts")
-            if sms_enabled:
-                user_phone = st.text_input("Your phone number:",
-                                           placeholder="+1234567890")
 
         # Threshold configuration
         st.subheader("⚙️ Alert Thresholds")
@@ -1305,11 +1361,21 @@ if not df_raw.empty:
                     )
 
                 # Show notification status
-                if email_enabled and 'user_email' in locals() and user_email:
-                    st.success("📧 Email notification ready!")
+                if email_enabled and user_email:
+                    # 1) Build subject & body from the alerts list
+                    subject = f"SoilSense Alert: {len(alerts)} issue(s) detected"
+                    body = "\n".join([
+                        f"{alert['sensor']}: {alert['message']} (Current: {alert['current_value']:.1f})"
+                        for alert in alerts
+                    ])
 
-                if sms_enabled and 'user_phone' in locals() and user_phone:
-                    st.success("📱 SMS notification ready!")
+                    # 2) Send the email
+                    try:
+                        send_email_alert(subject, body, recipients=[user_email])
+                        st.success(f"📧 Alert email sent to {user_email}!")
+                    except Exception as e:
+                        st.error(f"Failed to send email: {e}")
+
 
             else:
                 st.success("✅ All sensors are within normal ranges!")
