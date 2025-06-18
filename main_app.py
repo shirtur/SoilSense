@@ -184,6 +184,41 @@ with st.sidebar:
         selected_experiment = None
 
     st.markdown("---")
+    st.markdown("### 📅 Time Range Selection", unsafe_allow_html=True)
+
+    # get full data range
+    min_ts = df["timestamp"].min()
+    max_ts = df["timestamp"].max()
+
+    # date inputs
+    start_date = st.date_input(
+        "Start Date",
+        value=min_ts.date(),
+        min_value=min_ts.date(),
+        max_value=max_ts.date(),
+    )
+    end_date = st.date_input(
+        "End Date",
+        value=max_ts.date(),
+        min_value=min_ts.date(),
+        max_value=max_ts.date(),
+    )
+
+    # time-of-day inputs
+    start_time = st.time_input("Start Time", value=min_ts.time())
+    end_time = st.time_input("End Time", value=max_ts.time())
+
+    # combine into datetimes
+    start_dt = pd.to_datetime(f"{start_date} {start_time}")
+    end_dt = pd.to_datetime(f"{end_date}   {end_time}")
+
+    # apply filter
+    if start_dt <= end_dt:
+        df = df[(df["timestamp"] >= start_dt) & (df["timestamp"] <= end_dt)]
+    else:
+        st.error("Start must be before End")
+
+    st.markdown("---")
     st.markdown("### 🔍 Data Filtering")
 
     # Data filtering options
@@ -746,92 +781,57 @@ if not df_raw.empty:
         ["📈 Time Series", "📊 Statistics", "🔄 Correlations", "🚨 Alert System"])
 
     with viz_tab1:
-        # Time range selection
-        st.subheader("Time Range Selection")
-
-        # Get min and max timestamps
-        min_time = df['timestamp'].min()
-        max_time = df['timestamp'].max()
-
-        # Create two columns for start and end time
-        col1, col2 = st.columns(2)
-
-        with col1:
-            start_time = st.date_input("Start Date",
-                                       value=min_time.date(),
-                                       min_value=min_time.date(),
-                                       max_value=max_time.date())
-            start_hour = st.time_input("Start Time", value=min_time.time())
-
-        with col2:
-            end_time = st.date_input("End Date",
-                                     value=max_time.date(),
-                                     min_value=min_time.date(),
-                                     max_value=max_time.date())
-            end_hour = st.time_input("End Time", value=max_time.time())
-
-        # Combine date and time inputs
-        start_datetime = pd.to_datetime(f"{start_time} {start_hour}")
-        end_datetime = pd.to_datetime(f"{end_time} {end_hour}")
-
-        # Filter dataframe based on selected time range
-        if start_datetime <= end_datetime:
-            filtered_df = df[(df['timestamp'] >= start_datetime)
-                             & (df['timestamp'] <= end_datetime)]
-
-            if not filtered_df.empty:
-                # Create separate plots by sensor type
-                plots = create_sensor_plots(filtered_df)
-
-                # Display each plot type
-                for plot_title, fig in plots:
-                    st.subheader(plot_title)
-                    st.plotly_chart(fig, use_container_width=True, key=f"sensor_plot_{plot_title}")
 
 
-                # ADD THE NEW DUAL-AXIS SECTION HERE:
-                st.subheader("CO2 vs O2 Dual-Axis Analysis")
+        # Create separate plots by sensor type
+        plots = create_sensor_plots(df)
 
-                # Chamber selection
-                available_chambers = ['A', 'B', 'C', 'D']
-                selected_chamber = st.selectbox(
-                    "Select chamber for CO2 vs O2 comparison:",
-                    available_chambers,
-                    index=0,
-                    key="dual_axis_chamber"
-                )
+        # Display each plot type
+        for plot_title, fig in plots:
+            st.subheader(plot_title)
+            st.plotly_chart(fig, use_container_width=True, key=f"sensor_plot_{plot_title}")
 
-                # Create and display dual-axis plot
-                dual_plot = create_dual_axis_plot(filtered_df, selected_chamber)
-                if dual_plot:
-                    st.plotly_chart(dual_plot, use_container_width=True, key=f"dual_axis_{selected_chamber}")
-                else:
-                    st.warning(f"No CO2 or O2 data available for Chamber {selected_chamber}")
 
-                # Show data summary for filtered range (existing code)
-                st.write(
-                    f"📊 Showing {len(filtered_df)} data points from {start_time} to {end_time}"
-                )
+        # ADD THE NEW DUAL-AXIS SECTION HERE:
+        st.subheader("CO2 vs O2 Dual-Axis Analysis")
 
-                # Raw Data Table section (only in Time Series tab)
-                st.markdown("---")
-                with st.expander("View Raw Data", expanded=False):
-                    st.subheader("Raw Data (Filtered by Time Range)")
-                    st.dataframe(filtered_df.head(100),
-                                 use_container_width=True)
+        # Chamber selection
+        available_chambers = ['A', 'B', 'C', 'D']
+        selected_chamber = st.selectbox(
+            "Select chamber for CO2 vs O2 comparison:",
+            available_chambers,
+            index=0,
+            key="dual_axis_chamber"
+        )
 
-                    # Option to download filtered data
-                    csv = filtered_df.to_csv(index=False)
-                    st.download_button(
-                        label="Download Filtered Dataset",
-                        data=csv,
-                        file_name=
-                        f"soil_sense_data_{start_time}_to_{end_time}.csv",
-                        mime="text/csv")
-            else:
-                st.warning("No data found in the selected time range")
+        # Create and display dual-axis plot
+        dual_plot = create_dual_axis_plot(filtered_df, selected_chamber)
+        if dual_plot:
+            st.plotly_chart(dual_plot, use_container_width=True, key=f"dual_axis_{selected_chamber}")
         else:
-            st.error("Start time must be before end time")
+            st.warning(f"No CO2 or O2 data available for Chamber {selected_chamber}")
+
+        # Show data summary for filtered range (existing code)
+        st.write(
+            f"📊 Showing {len(filtered_df)} data points from {start_time} to {end_time}"
+        )
+
+        # Raw Data Table section (only in Time Series tab)
+        st.markdown("---")
+        with st.expander("View Raw Data", expanded=False):
+            st.subheader("Raw Data (Filtered)")
+            st.dataframe(df.head(100),
+                         use_container_width=True)
+
+            # Option to download filtered data
+            csv = filtered_df.to_csv(index=False)
+            st.download_button(
+                label="Download Filtered Dataset",
+                data=csv,
+                file_name=
+                f"soil_sense_data_{start_time}_to_{end_time}.csv",
+                mime="text/csv")
+
 
     with viz_tab2:
         st.subheader("Sensor Statistics")
