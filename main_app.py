@@ -686,6 +686,11 @@ if not df.empty:
 else:
     st.sidebar.info("No data loaded yet")
 
+# ─── Define sensor_columns for use in all tabs ─────────────────────────
+sensor_columns = [col for col in df.columns if col != "timestamp"]
+# ────────────────────────────────────────────────────────────────────────
+
+
 if df.empty:
     st.error("No data available…")
 else:
