@@ -45,7 +45,7 @@ def apply_data_filter(df, filter_option, filter_params):
     if df.empty or filter_option == "No filter":
         return df
 
-    filtered_df = df.copy()
+    copy_df = df.copy()
     sensor_columns = [col for col in df.columns if col != 'timestamp']
     replacement_method = filter_params.get('replacement_method', 'Fill with blank values')
     replaced_count = 0
@@ -53,12 +53,12 @@ def apply_data_filter(df, filter_option, filter_params):
     if filter_option == "Remove zero values":
         # Handle zero values in individual sensors
         for col in sensor_columns:
-            mask = filtered_df[col] == 0
+            mask = copy_df[col] == 0
             if replacement_method == "Fill with blank values":
-                filtered_df.loc[mask, col] = None
+                copy_df.loc[mask, col] = None
             else:  # Replace with averages
-                avg_value = filtered_df[col][~mask].mean()
-                filtered_df.loc[mask, col] = avg_value
+                avg_value = copy_df[col][~mask].mean()
+                copy_df.loc[mask, col] = avg_value
 
     elif filter_option == "Remove extreme outliers":
         method = filter_params.get('outlier_method', "Statistical (3σ)")
@@ -70,7 +70,7 @@ def apply_data_filter(df, filter_option, filter_params):
                 mask = (df[col] > μ + 3 * σ) | (df[col] < μ - 3 * σ)
                 replaced_count += mask.sum()
                 # set just those values to NaN
-                filtered_df.loc[mask, col] = np.nan
+                copy_df.loc[mask, col] = np.nan
 
             elif method == "Interquartile Range (IQR)":
                 q1, q3 = df[col].quantile([0.25, 0.75])
@@ -78,7 +78,7 @@ def apply_data_filter(df, filter_option, filter_params):
                 lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
                 mask = (df[col] > upper) | (df[col] < lower)
                 replaced_count += mask.sum()
-                filtered_df.loc[mask, col] = np.nan
+                copy_df.loc[mask, col] = np.nan
 
             elif method == "Percentile (1%-99%)":
                 lower = df[col].quantile(0.01)
@@ -87,23 +87,23 @@ def apply_data_filter(df, filter_option, filter_params):
                 # count how many values we’re blanking
                 replaced_count += mask.sum()
                 # set just those values to NaN
-                filtered_df.loc[mask, col] = np.nan
+                copy_df.loc[mask, col] = np.nan
 
     elif filter_option == "Remove sudden spikes":
         spike_threshold = filter_params.get('spike_threshold', 150) / 100.0
 
         for col in sensor_columns:
             # Pseudocode replacement:
-            mask = filtered_df[col].pct_change().abs() > spike_threshold
+            mask = copy_df[col].pct_change().abs() > spike_threshold
             replaced_count += mask.sum()
             if replacement_method == "Fill with blank values":
-                filtered_df.loc[mask, col] = np.nan
+                copy_df.loc[mask, col] = np.nan
             else:
-                avg = filtered_df[col][~mask].mean()
-                filtered_df.loc[mask, col] = avg
+                avg = copy_df[col][~mask].mean()
+                copy_df.loc[mask, col] = avg
 
 
-    return filtered_df
+    return copy_df
 
 # Function to parse experiment TXT files with correct column structure
 @st.cache_data
@@ -724,7 +724,7 @@ else:
         )
 
         # Create and display dual-axis plot
-        dual_plot = create_dual_axis_plot(filtered_df, selected_chamber)
+        dual_plot = create_dual_axis_plot(df, selected_chamber)
         if dual_plot:
             st.plotly_chart(dual_plot, use_container_width=True, key=f"dual_axis_{selected_chamber}")
         else:
@@ -732,7 +732,7 @@ else:
 
         # Show data summary for filtered range (existing code)
         st.write(
-            f"📊 Showing {len(filtered_df)} data points from {start_time} to {end_time}"
+            f"📊 Showing {len(df)} data points from {start_time} to {end_time}"
         )
 
         # Raw Data Table section (only in Time Series tab)
@@ -743,7 +743,7 @@ else:
                          use_container_width=True)
 
             # Option to download filtered data
-            csv = filtered_df.to_csv(index=False)
+            csv = df.to_csv(index=False)
             st.download_button(
                 label="Download Filtered Dataset",
                 data=csv,
