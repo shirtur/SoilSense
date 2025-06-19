@@ -1250,56 +1250,45 @@ else:
                                           value=3.5,
                                           step=0.1,
                                           key="battery_min")
-
-        # Check alerts button
-        if st.button("🔍 Check Current Status", type="primary"):
-            # Define thresholds based on user input
-            thresholds = {
-                'co2': {
-                    'min': co2_min,
-                    'max': co2_max
-                },
-                'temperature': {
-                    'min': temp_min,
-                    'max': temp_max
-                },
-                'humidity': {
-                    'min': hum_min,
-                    'max': hum_max
-                },
-                'battery': {
-                    'min': battery_min
-                }
+        # Define thresholds based on user input
+        thresholds = {
+            'co2': {
+                'min': co2_min,
+                'max': co2_max
+            },
+            'temperature': {
+                'min': temp_min,
+                'max': temp_max
+            },
+            'humidity': {
+                'min': hum_min,
+                'max': hum_max
+            },
+            'battery': {
+                'min': battery_min
             }
+        }
+        # Check for alerts
+        alerts = check_sensor_thresholds(df, thresholds)
 
-            # Check for alerts
-            alerts = check_sensor_thresholds(df, thresholds)
-
-            if alerts:
-                st.error(f"🚨 {len(alerts)} Alert(s) Detected!")
-
-                for alert in alerts:
-                    severity_color = "🔴" if alert['severity'] == 'high' else "🟡"
-                    st.warning(
-                        f"{severity_color} **{alert['sensor']}**: {alert['message']} (Current: {alert['current_value']:.1f})"
-                    )
-
-                # Show notification status
-                if email_enabled and user_email:
-                    # 1) Build subject & body from the alerts list
-                    subject = f"SoilSense Alert: {len(alerts)} issue(s) detected"
-                    body = "\n".join([
-                        f"{alert['sensor']}: {alert['message']} (Current: {alert['current_value']:.1f})"
-                        for alert in alerts
-                    ])
-
-                    # 2) Send the email
-                    try:
-                        send_email_alert(subject, body, recipients=[user_email])
-                        st.success(f"📧 Alert email sent to {user_email}!")
-                    except Exception as e:
-                        st.error(f"Failed to send email: {e}")
-
-
-            else:
-                st.success("✅ All sensors are within normal ranges!")
+        if email_enabled and user_email and alerts:
+            # Only send once per session, to avoid spamming
+            if not st.session_state.get("alert_sent", False):
+                subject = f"SoilSense Alert: {len(alerts)} issue(s) detected"
+                body = "\n".join(
+                    f"{a['sensor']}: {a['message']} (Current: {a['current_value']:.1f})"
+                    for a in alerts
+                )
+                try:
+                    send_email_alert(subject, body, recipients=[user_email])
+                    st.success(f"📧 Automatic alert sent to {user_email}")
+                    st.session_state["alert_sent"] = True
+                except Exception as e:
+                    st.error(f"Failed to send email: {e}")
+            # Then still show the on-screen warning
+            st.error(f"🚨 {len(alerts)} Alert(s) Detected!")
+            for a in alerts:
+                icon = "🔴" if a["severity"] == "high" else "🟡"
+                st.warning(f"{icon} **{a['sensor']}**: {a['message']}")
+        else:
+            st.success("✅ All sensors are within normal ranges!")
