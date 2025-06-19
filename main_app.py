@@ -1298,7 +1298,3 @@ else:
 
             else:
                 st.success("✅ All sensors are within normal ranges!")
-
-else:
-    st.error(
-        "No data available. Please check your data source or upload a file.")
