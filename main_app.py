@@ -40,6 +40,432 @@ def load_experiment_data(experiment_name: str) -> pd.DataFrame:
         return pd.DataFrame()
     return parse_experiment_file(path)  # your existing parser
 
+def apply_data_filter(df, filter_option, filter_params):
+    """Apply selected data filter to individual sensors, preserving rows"""
+    if df.empty or filter_option == "No filter":
+        return df
+
+    filtered_df = df.copy()
+    sensor_columns = [col for col in df.columns if col != 'timestamp']
+    replacement_method = filter_params.get('replacement_method', 'Fill with blank values')
+    replaced_count = 0
+
+    if filter_option == "Remove zero values":
+        # Handle zero values in individual sensors
+        for col in sensor_columns:
+            mask = filtered_df[col] == 0
+            if replacement_method == "Fill with blank values":
+                filtered_df.loc[mask, col] = None
+            else:  # Replace with averages
+                avg_value = filtered_df[col][~mask].mean()
+                filtered_df.loc[mask, col] = avg_value
+
+    elif filter_option == "Remove extreme outliers":
+        method = filter_params.get('outlier_method', "Statistical (3σ)")
+
+        for col in sensor_columns:
+            if method == "Statistical (3σ)":
+                μ, σ = df[col].mean(), df[col].std()
+                # mask of outliers beyond ±3σ
+                mask = (df[col] > μ + 3 * σ) | (df[col] < μ - 3 * σ)
+                replaced_count += mask.sum()
+                # set just those values to NaN
+                filtered_df.loc[mask, col] = np.nan
+
+            elif method == "Interquartile Range (IQR)":
+                q1, q3 = df[col].quantile([0.25, 0.75])
+                iqr = q3 - q1
+                lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+                mask = (df[col] > upper) | (df[col] < lower)
+                replaced_count += mask.sum()
+                filtered_df.loc[mask, col] = np.nan
+
+            elif method == "Percentile (1%-99%)":
+                lower = df[col].quantile(0.01)
+                upper = df[col].quantile(0.99)
+                mask = (df[col] < lower) | (df[col] > upper)
+                # count how many values we’re blanking
+                replaced_count += mask.sum()
+                # set just those values to NaN
+                filtered_df.loc[mask, col] = np.nan
+
+    elif filter_option == "Remove sudden spikes":
+        spike_threshold = filter_params.get('spike_threshold', 150) / 100.0
+
+        for col in sensor_columns:
+            # Pseudocode replacement:
+            mask = filtered_df[col].pct_change().abs() > spike_threshold
+            replaced_count += mask.sum()
+            if replacement_method == "Fill with blank values":
+                filtered_df.loc[mask, col] = np.nan
+            else:
+                avg = filtered_df[col][~mask].mean()
+                filtered_df.loc[mask, col] = avg
+
+
+    return filtered_df
+
+# Function to parse experiment TXT files with correct column structure
+@st.cache_data
+def parse_experiment_file(file_path):
+    """Parse experiment TXT file with correct column structure for your data"""
+    try:
+        with open(file_path, 'r') as file:
+            content = file.read()
+
+        lines = content.strip().split('\n')
+
+        # Skip the header line and parse data
+        data_rows = []
+        for line in lines:  # Process all lines (no header to skip)
+            line = line.strip()
+            if not line:  # Skip empty lines
+                continue
+            parts = line.split(',')  # Use comma separator
+            if len(
+                    parts
+            ) >= 20:  # Ensure we have enough columns based on your data structure
+                try:
+                    # Parse timestamp from first column
+                    time_str = parts[0].strip()
+                    if time_str and '/' in time_str:
+                        # Handle different time formats
+                        try:
+                            if ':' in time_str:
+                                timestamp = datetime.strptime(
+                                    time_str, '%H:%M:%S %d/%m/%Y')
+                            else:
+                                timestamp = datetime.strptime(
+                                    time_str, '%d/%m/%Y')
+                        except:
+                            continue
+
+                        # Parse sensor values - convert to float, handle empty values
+                        values = []
+                        for val in parts[1:]:
+                            try:
+                                values.append(
+                                    float(val.strip()) if val.strip() else 0.0)
+                            except:
+                                values.append(0.0)
+
+                        data_rows.append([timestamp] + values)
+                except:
+                    continue  # Skip problematic lines
+
+        # Define column names based on your actual experiment data structure
+        columns = [
+            'timestamp', 'CO2SCD30A [ppm]', 'Temperature_SCD30A [°C]',
+            'RHSCD30A [%]', 'CO2SCD30B [ppm]', 'Temperature_SCD30B [°C]',
+            'RHSCD30B [%]', 'CO2SCD30C [ppm]', 'Temperature_SCD30C [°C]',
+            'RHSCD30C [%]', 'CO2SCD30D [ppm]', 'Temperature_SCD30D [°C]',
+            'RHSCD30D [%]', 'oxygenDa_A [%Vol]', 'oxygenDa_B [%Vol]',
+            'oxygenDa_C [%Vol]', 'oxygenDa_D [%Vol]',
+            'oxygenBo_airTemp_A [°C]', 'oxygenBo_airTemp_B [°C]',
+            'oxygenBo_airTemp_C [°C]', 'oxygenBo_airTemp_D [°C]',
+            'measuredvbat [V]'
+        ]
+
+        # Truncate columns to match available data
+        max_cols = min(len(columns), len(data_rows[0]) if data_rows else 0)
+        columns = columns[:max_cols]
+
+        df = pd.DataFrame(data_rows, columns=columns)
+
+        return df
+
+    except Exception as e:
+        st.error(f"Error parsing file {file_path}: {e}")
+        return pd.DataFrame()
+
+# Function to create separate plots by sensor type
+def create_sensor_plots(df):
+    """Create separate plots for CO2, Temperature, and Humidity sensors"""
+    if df.empty:
+        return []
+
+    # Group sensors by type
+    co2_sensors = [col for col in df.columns if col.startswith('CO2')]
+    temp_sensors = [col for col in df.columns if col.startswith('Temperature')]
+    humidity_sensors = [col for col in df.columns if col.startswith('RH')]
+    oxygen_sensors = [col for col in df.columns if col.startswith('oxygenDa')]
+    oxygen_temp_sensors = [
+        col for col in df.columns if col.startswith('oxygenBo_airTemp')
+    ]
+
+    plots = []
+
+    # CO2 Plot
+    if co2_sensors:
+        fig_co2 = go.Figure()
+        for sensor in co2_sensors:
+            fig_co2.add_trace(
+                go.Scatter(x=df['timestamp'],
+                           y=df[sensor],
+                           mode='lines',
+                           name=sensor.replace('_', ' '),
+                           line=dict(width=2)))
+        fig_co2.update_layout(title="🌱 CO2 Levels (ppm)",
+                              xaxis_title="Time",
+                              yaxis_title="CO2 (ppm)",
+                              hovermode='x unified',
+                              height=400)
+        plots.append(("CO2 Sensors", fig_co2))
+
+    # Temperature Plot
+    if temp_sensors:
+        fig_temp = go.Figure()
+        for sensor in temp_sensors:
+            fig_temp.add_trace(
+                go.Scatter(x=df['timestamp'],
+                           y=df[sensor],
+                           mode='lines',
+                           name=sensor.replace('_', ' '),
+                           line=dict(width=2)))
+        fig_temp.update_layout(title="🌡️ Temperature Readings (°C)",
+                               xaxis_title="Time",
+                               yaxis_title="Temperature (°C)",
+                               hovermode='x unified',
+                               height=400)
+        plots.append(("Temperature Sensors", fig_temp))
+
+    # Humidity Plot
+    if humidity_sensors:
+        fig_humidity = go.Figure()
+        for sensor in humidity_sensors:
+            fig_humidity.add_trace(
+                go.Scatter(x=df['timestamp'],
+                           y=df[sensor],
+                           mode='lines',
+                           name=sensor.replace('_', ' '),
+                           line=dict(width=2)))
+        fig_humidity.update_layout(title="💧 Humidity Levels (%)",
+                                   xaxis_title="Time",
+                                   yaxis_title="Humidity (%)",
+                                   hovermode='x unified',
+                                   height=400)
+        plots.append(("Humidity Sensors", fig_humidity))
+
+    # Oxygen Plot
+    if oxygen_sensors:
+        fig_oxygen = go.Figure()
+        for sensor in oxygen_sensors:
+            fig_oxygen.add_trace(
+                go.Scatter(x=df['timestamp'],
+                           y=df[sensor],
+                           mode='lines',
+                           name=sensor.replace('_', ' '),
+                           line=dict(width=2)))
+        fig_oxygen.update_layout(title="🫁 Oxygen Levels (%Vol)",
+                                 xaxis_title="Time",
+                                 yaxis_title="Oxygen (%Vol)",
+                                 hovermode='x unified',
+                                 height=400)
+        plots.append(("Oxygen Sensors", fig_oxygen))
+
+    # Oxygen Temperature Plot
+    if oxygen_temp_sensors:
+        fig_oxygen_temp = go.Figure()
+        for sensor in oxygen_temp_sensors:
+            fig_oxygen_temp.add_trace(
+                go.Scatter(x=df['timestamp'],
+                           y=df[sensor],
+                           mode='lines',
+                           name=sensor.replace('_', ' '),
+                           line=dict(width=2)))
+        fig_oxygen_temp.update_layout(
+            title="🌡️ Oxygen Sensor Temperature (°C)",
+            xaxis_title="Time",
+            yaxis_title="Temperature (°C)",
+            hovermode='x unified',
+            height=400)
+        plots.append(("Oxygen Temperature", fig_oxygen_temp))
+
+    return plots
+
+def create_dual_axis_plot(df, chamber='A'):
+    """Create a dual-axis plot with CO2 and O2 for selected chamber"""
+    if df.empty:
+        return None
+
+    # Find CO2 and O2 sensors for the selected chamber
+    co2_sensor = f'CO2SCD30{chamber} [ppm]'
+    o2_sensor = f'oxygenDa_{chamber} [%Vol]'
+
+    # Check if both sensors exist
+    if co2_sensor not in df.columns or o2_sensor not in df.columns:
+        return None
+
+    # Create figure with secondary y-axis
+    fig = go.Figure()
+
+    # Add CO2 trace (left y-axis)
+    fig.add_trace(
+        go.Scatter(
+            x=df['timestamp'],
+            y=df[co2_sensor],
+            mode='lines',
+            name=f'CO2 Chamber {chamber}',
+            line=dict(color='#2E7D32', width=3),
+            yaxis='y'
+        )
+    )
+
+    # Add O2 trace (right y-axis)
+    fig.add_trace(
+        go.Scatter(
+            x=df['timestamp'],
+            y=df[o2_sensor],
+            mode='lines',
+            name=f'O2 Chamber {chamber}',
+            line=dict(color='#1E88E5', width=3),
+            yaxis='y2'
+        )
+    )
+
+    # Update layout with dual y-axes
+    fig.update_layout(
+        title=f"🌱 CO2 vs O2 Levels - Chamber {chamber}",
+        xaxis_title="Time",
+        yaxis=dict(
+            title="CO2 (ppm)",
+            title_font=dict(color='#2E7D32'),
+            tickfont=dict(color='#2E7D32'),
+            side='left'
+        ),
+        yaxis2=dict(
+            title="O2 (%Vol)",
+            title_font=dict(color='#1E88E5'),
+            tickfont=dict(color='#1E88E5'),
+            anchor='x',
+            overlaying='y',
+            side='right'
+        ),
+        hovermode='x unified',
+        height=400,
+        template='plotly_white'
+    )
+
+    return fig
+
+# Create correlation heatmap
+def create_correlation_heatmap(df, columns):
+    """Create a correlation heatmap for selected sensors"""
+    columns = [c for c in columns if not c.endswith("_pct_change")]
+    if len(columns) < 2:
+        return None
+
+    corr_df = df[columns].corr()
+    # Format correlation values to 4 decimal places
+    text_values = corr_df.round(4).values
+
+    fig = px.imshow(corr_df,
+                    text_auto=False,
+                    color_continuous_scale='RdBu_r',
+                    zmin=-1,
+                    zmax=1,
+                    title="Sensor Correlation Heatmap")
+
+    # Add custom text with 4 decimal places
+    fig.update_traces(text=text_values, texttemplate="%{text}", textfont_size=16)
+    fig.update_layout(height=400)
+
+    return fig
+
+# Alert System Functions
+def check_sensor_thresholds(df, thresholds):
+    """Check current sensor readings against defined thresholds"""
+    if df.empty or len(df) == 0:
+        return []
+
+    alerts = []
+    latest_row = df.iloc[-1]
+    current_time = datetime.now()
+
+    # Check CO2 sensors
+    co2_columns = [col for col in df.columns if col.startswith('CO2')]
+    for col in co2_columns:
+        value = latest_row[col]
+        if value < thresholds['co2']['min']:
+            alerts.append({
+                'sensor': col,
+                'message': f'CO2 level too low',
+                'current_value': value,
+                'threshold': thresholds['co2']['min'],
+                'severity': 'medium',
+                'timestamp': current_time
+            })
+        elif value > thresholds['co2']['max']:
+            alerts.append({
+                'sensor': col,
+                'message': f'CO2 level too high',
+                'current_value': value,
+                'threshold': thresholds['co2']['max'],
+                'severity': 'high',
+                'timestamp': current_time
+            })
+
+    # Check Temperature sensors
+    temp_columns = [col for col in df.columns if col.startswith('Temperature')]
+    for col in temp_columns:
+        value = latest_row[col]
+        if value < thresholds['temperature']['min']:
+            alerts.append({
+                'sensor': col,
+                'message': f'Temperature too low',
+                'current_value': value,
+                'threshold': thresholds['temperature']['min'],
+                'severity': 'high',
+                'timestamp': current_time
+            })
+        elif value > thresholds['temperature']['max']:
+            alerts.append({
+                'sensor': col,
+                'message': f'Temperature too high',
+                'current_value': value,
+                'threshold': thresholds['temperature']['max'],
+                'severity': 'high',
+                'timestamp': current_time
+            })
+
+    # Check Humidity sensors
+    humidity_columns = [col for col in df.columns if col.startswith('RH')]
+    for col in humidity_columns:
+        value = latest_row[col]
+        if value < thresholds['humidity']['min']:
+            alerts.append({
+                'sensor': col,
+                'message': f'Humidity too low',
+                'current_value': value,
+                'threshold': thresholds['humidity']['min'],
+                'severity': 'medium',
+                'timestamp': current_time
+            })
+        elif value > thresholds['humidity']['max']:
+            alerts.append({
+                'sensor': col,
+                'message': f'Humidity too high',
+                'current_value': value,
+                'threshold': thresholds['humidity']['max'],
+                'severity': 'medium',
+                'timestamp': current_time
+            })
+
+    # Check Battery voltage
+    if 'Battery_Volt' in df.columns:
+        value = latest_row['Battery_Volt']
+        if value < thresholds['battery']['min']:
+            alerts.append({
+                'sensor': 'Battery_Volt',
+                'message': f'Battery voltage low',
+                'current_value': value,
+                'threshold': thresholds['battery']['min'],
+                'severity': 'high',
+                'timestamp': current_time
+            })
+
+    return alerts
+
 def send_email_alert(subject: str, body: str, recipients: list[str] = None):
     """
     Send an email via SMTP. If `recipients` is provided, use it;
@@ -184,41 +610,7 @@ with st.sidebar:
         selected_experiment = None
 
     st.markdown("---")
-    st.markdown("### 📅 Time Range Selection", unsafe_allow_html=True)
 
-    # get full data range
-    min_ts = df["timestamp"].min()
-    max_ts = df["timestamp"].max()
-
-    # date inputs
-    start_date = st.date_input(
-        "Start Date",
-        value=min_ts.date(),
-        min_value=min_ts.date(),
-        max_value=max_ts.date(),
-    )
-    end_date = st.date_input(
-        "End Date",
-        value=max_ts.date(),
-        min_value=min_ts.date(),
-        max_value=max_ts.date(),
-    )
-
-    # time-of-day inputs
-    start_time = st.time_input("Start Time", value=min_ts.time())
-    end_time = st.time_input("End Time", value=max_ts.time())
-
-    # combine into datetimes
-    start_dt = pd.to_datetime(f"{start_date} {start_time}")
-    end_dt = pd.to_datetime(f"{end_date}   {end_time}")
-
-    # apply filter
-    if start_dt <= end_dt:
-        df = df[(df["timestamp"] >= start_dt) & (df["timestamp"] <= end_dt)]
-    else:
-        st.error("Start must be before End")
-
-    st.markdown("---")
     st.markdown("### 🔍 Data Filtering")
 
     # Data filtering options
@@ -254,8 +646,6 @@ with st.sidebar:
             key="spike_threshold_slider"
         )
 
-
-
     if filter_option != "No filter":
         st.markdown("**Handling method for individual sensor issues:**")
         filter_params['replacement_method'] = st.radio(
@@ -266,523 +656,52 @@ with st.sidebar:
             help="Choose how to handle bad data from individual sensors"
         )
 
-
-
-# Data filtering function
-def apply_data_filter(df, filter_option, filter_params):
-    """Apply selected data filter to individual sensors, preserving rows"""
-    if df.empty or filter_option == "No filter":
-        return df
-
-    filtered_df = df.copy()
-    sensor_columns = [col for col in df.columns if col != 'timestamp']
-    replacement_method = filter_params.get('replacement_method', 'Fill with blank values')
-    replaced_count = 0
-
-    if filter_option == "Remove zero values":
-        # Handle zero values in individual sensors
-        for col in sensor_columns:
-            mask = filtered_df[col] == 0
-            if replacement_method == "Fill with blank values":
-                filtered_df.loc[mask, col] = None
-            else:  # Replace with averages
-                avg_value = filtered_df[col][~mask].mean()
-                filtered_df.loc[mask, col] = avg_value
-
-    elif filter_option == "Remove extreme outliers":
-        method = filter_params.get('outlier_method', "Statistical (3σ)")
-
-        for col in sensor_columns:
-            if method == "Statistical (3σ)":
-                μ, σ = df[col].mean(), df[col].std()
-                # mask of outliers beyond ±3σ
-                mask = (df[col] > μ + 3 * σ) | (df[col] < μ - 3 * σ)
-                replaced_count += mask.sum()
-                # set just those values to NaN
-                filtered_df.loc[mask, col] = np.nan
-
-            elif method == "Interquartile Range (IQR)":
-                q1, q3 = df[col].quantile([0.25, 0.75])
-                iqr = q3 - q1
-                lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-                mask = (df[col] > upper) | (df[col] < lower)
-                replaced_count += mask.sum()
-                filtered_df.loc[mask, col] = np.nan
-
-            elif method == "Percentile (1%-99%)":
-                lower = df[col].quantile(0.01)
-                upper = df[col].quantile(0.99)
-                mask = (df[col] < lower) | (df[col] > upper)
-                # count how many values we’re blanking
-                replaced_count += mask.sum()
-                # set just those values to NaN
-                filtered_df.loc[mask, col] = np.nan
-
-    elif filter_option == "Remove sudden spikes":
-        spike_threshold = filter_params.get('spike_threshold', 150) / 100.0
-
-        for col in sensor_columns:
-            # Pseudocode replacement:
-            mask = filtered_df[col].pct_change().abs() > spike_threshold
-            replaced_count += mask.sum()
-            if replacement_method == "Fill with blank values":
-                filtered_df.loc[mask, col] = np.nan
-            else:
-                avg = filtered_df[col][~mask].mean()
-                filtered_df.loc[mask, col] = avg
-
-
-    return filtered_df
-# Function to parse experiment TXT files with correct column structure
-@st.cache_data
-def parse_experiment_file(file_path):
-    """Parse experiment TXT file with correct column structure for your data"""
-    try:
-        with open(file_path, 'r') as file:
-            content = file.read()
-
-        lines = content.strip().split('\n')
-
-        # Skip the header line and parse data
-        data_rows = []
-        for line in lines:  # Process all lines (no header to skip)
-            line = line.strip()
-            if not line:  # Skip empty lines
-                continue
-            parts = line.split(',')  # Use comma separator
-            if len(
-                    parts
-            ) >= 20:  # Ensure we have enough columns based on your data structure
-                try:
-                    # Parse timestamp from first column
-                    time_str = parts[0].strip()
-                    if time_str and '/' in time_str:
-                        # Handle different time formats
-                        try:
-                            if ':' in time_str:
-                                timestamp = datetime.strptime(
-                                    time_str, '%H:%M:%S %d/%m/%Y')
-                            else:
-                                timestamp = datetime.strptime(
-                                    time_str, '%d/%m/%Y')
-                        except:
-                            continue
-
-                        # Parse sensor values - convert to float, handle empty values
-                        values = []
-                        for val in parts[1:]:
-                            try:
-                                values.append(
-                                    float(val.strip()) if val.strip() else 0.0)
-                            except:
-                                values.append(0.0)
-
-                        data_rows.append([timestamp] + values)
-                except:
-                    continue  # Skip problematic lines
-
-        # Define column names based on your actual experiment data structure
-        columns = [
-            'timestamp', 'CO2SCD30A [ppm]', 'Temperature_SCD30A [°C]',
-            'RHSCD30A [%]', 'CO2SCD30B [ppm]', 'Temperature_SCD30B [°C]',
-            'RHSCD30B [%]', 'CO2SCD30C [ppm]', 'Temperature_SCD30C [°C]',
-            'RHSCD30C [%]', 'CO2SCD30D [ppm]', 'Temperature_SCD30D [°C]',
-            'RHSCD30D [%]', 'oxygenDa_A [%Vol]', 'oxygenDa_B [%Vol]',
-            'oxygenDa_C [%Vol]', 'oxygenDa_D [%Vol]',
-            'oxygenBo_airTemp_A [°C]', 'oxygenBo_airTemp_B [°C]',
-            'oxygenBo_airTemp_C [°C]', 'oxygenBo_airTemp_D [°C]',
-            'measuredvbat [V]'
-        ]
-
-        # Truncate columns to match available data
-        max_cols = min(len(columns), len(data_rows[0]) if data_rows else 0)
-        columns = columns[:max_cols]
-
-        df = pd.DataFrame(data_rows, columns=columns)
-
-        return df
-
-    except Exception as e:
-        st.error(f"Error parsing file {file_path}: {e}")
-        return pd.DataFrame()
-
-
-# Cache the data generation to improve performance
-@st.cache_data
-def load_experiment_data(experiment_name):
-    """Load data from selected experiment file"""
-    if not experiment_name:
-        return pd.DataFrame()
-
-    # Try different possible paths (local vs cloud environment)
-    possible_paths = [
-        "attached_assets",  # Cloud environment
-        "C:/Users/USER001/Desktop/SoilSense/attached_assets",  # Your local path
-        "./attached_assets"  # Relative path
-    ]
-
-    # Try each path with both .txt and .TXT extensions
-    for base_path in possible_paths:
-        if os.path.exists(base_path):
-            # Try .txt extension
-            file_path_txt = os.path.join(base_path, f"{experiment_name}.txt")
-            if os.path.exists(file_path_txt):
-                return parse_experiment_file(file_path_txt)
-
-            # Try .TXT extension
-            file_path_TXT = os.path.join(base_path, f"{experiment_name}.TXT")
-            if os.path.exists(file_path_TXT):
-                return parse_experiment_file(file_path_TXT)
-
-    return pd.DataFrame()
-
-
-# Function to create separate plots by sensor type
-def create_sensor_plots(df):
-    """Create separate plots for CO2, Temperature, and Humidity sensors"""
-    if df.empty:
-        return []
-
-    # Group sensors by type
-    co2_sensors = [col for col in df.columns if col.startswith('CO2')]
-    temp_sensors = [col for col in df.columns if col.startswith('Temperature')]
-    humidity_sensors = [col for col in df.columns if col.startswith('RH')]
-    oxygen_sensors = [col for col in df.columns if col.startswith('oxygenDa')]
-    oxygen_temp_sensors = [
-        col for col in df.columns if col.startswith('oxygenBo_airTemp')
-    ]
-
-    plots = []
-
-    # CO2 Plot
-    if co2_sensors:
-        fig_co2 = go.Figure()
-        for sensor in co2_sensors:
-            fig_co2.add_trace(
-                go.Scatter(x=df['timestamp'],
-                           y=df[sensor],
-                           mode='lines',
-                           name=sensor.replace('_', ' '),
-                           line=dict(width=2)))
-        fig_co2.update_layout(title="🌱 CO2 Levels (ppm)",
-                              xaxis_title="Time",
-                              yaxis_title="CO2 (ppm)",
-                              hovermode='x unified',
-                              height=400)
-        plots.append(("CO2 Sensors", fig_co2))
-
-    # Temperature Plot
-    if temp_sensors:
-        fig_temp = go.Figure()
-        for sensor in temp_sensors:
-            fig_temp.add_trace(
-                go.Scatter(x=df['timestamp'],
-                           y=df[sensor],
-                           mode='lines',
-                           name=sensor.replace('_', ' '),
-                           line=dict(width=2)))
-        fig_temp.update_layout(title="🌡️ Temperature Readings (°C)",
-                               xaxis_title="Time",
-                               yaxis_title="Temperature (°C)",
-                               hovermode='x unified',
-                               height=400)
-        plots.append(("Temperature Sensors", fig_temp))
-
-    # Humidity Plot
-    if humidity_sensors:
-        fig_humidity = go.Figure()
-        for sensor in humidity_sensors:
-            fig_humidity.add_trace(
-                go.Scatter(x=df['timestamp'],
-                           y=df[sensor],
-                           mode='lines',
-                           name=sensor.replace('_', ' '),
-                           line=dict(width=2)))
-        fig_humidity.update_layout(title="💧 Humidity Levels (%)",
-                                   xaxis_title="Time",
-                                   yaxis_title="Humidity (%)",
-                                   hovermode='x unified',
-                                   height=400)
-        plots.append(("Humidity Sensors", fig_humidity))
-
-    # Oxygen Plot
-    if oxygen_sensors:
-        fig_oxygen = go.Figure()
-        for sensor in oxygen_sensors:
-            fig_oxygen.add_trace(
-                go.Scatter(x=df['timestamp'],
-                           y=df[sensor],
-                           mode='lines',
-                           name=sensor.replace('_', ' '),
-                           line=dict(width=2)))
-        fig_oxygen.update_layout(title="🫁 Oxygen Levels (%Vol)",
-                                 xaxis_title="Time",
-                                 yaxis_title="Oxygen (%Vol)",
-                                 hovermode='x unified',
-                                 height=400)
-        plots.append(("Oxygen Sensors", fig_oxygen))
-
-    # Oxygen Temperature Plot
-    if oxygen_temp_sensors:
-        fig_oxygen_temp = go.Figure()
-        for sensor in oxygen_temp_sensors:
-            fig_oxygen_temp.add_trace(
-                go.Scatter(x=df['timestamp'],
-                           y=df[sensor],
-                           mode='lines',
-                           name=sensor.replace('_', ' '),
-                           line=dict(width=2)))
-        fig_oxygen_temp.update_layout(
-            title="🌡️ Oxygen Sensor Temperature (°C)",
-            xaxis_title="Time",
-            yaxis_title="Temperature (°C)",
-            hovermode='x unified',
-            height=400)
-        plots.append(("Oxygen Temperature", fig_oxygen_temp))
-
-    return plots
-
-
-def create_dual_axis_plot(df, chamber='A'):
-    """Create a dual-axis plot with CO2 and O2 for selected chamber"""
-    if df.empty:
-        return None
-
-    # Find CO2 and O2 sensors for the selected chamber
-    co2_sensor = f'CO2SCD30{chamber} [ppm]'
-    o2_sensor = f'oxygenDa_{chamber} [%Vol]'
-
-    # Check if both sensors exist
-    if co2_sensor not in df.columns or o2_sensor not in df.columns:
-        return None
-
-    # Create figure with secondary y-axis
-    fig = go.Figure()
-
-    # Add CO2 trace (left y-axis)
-    fig.add_trace(
-        go.Scatter(
-            x=df['timestamp'],
-            y=df[co2_sensor],
-            mode='lines',
-            name=f'CO2 Chamber {chamber}',
-            line=dict(color='#2E7D32', width=3),
-            yaxis='y'
-        )
-    )
-
-    # Add O2 trace (right y-axis)
-    fig.add_trace(
-        go.Scatter(
-            x=df['timestamp'],
-            y=df[o2_sensor],
-            mode='lines',
-            name=f'O2 Chamber {chamber}',
-            line=dict(color='#1E88E5', width=3),
-            yaxis='y2'
-        )
-    )
-
-    # Update layout with dual y-axes
-    fig.update_layout(
-        title=f"🌱 CO2 vs O2 Levels - Chamber {chamber}",
-        xaxis_title="Time",
-        yaxis=dict(
-            title="CO2 (ppm)",
-            title_font=dict(color='#2E7D32'),
-            tickfont=dict(color='#2E7D32'),
-            side='left'
-        ),
-        yaxis2=dict(
-            title="O2 (%Vol)",
-            title_font=dict(color='#1E88E5'),
-            tickfont=dict(color='#1E88E5'),
-            anchor='x',
-            overlaying='y',
-            side='right'
-        ),
-        hovermode='x unified',
-        height=400,
-        template='plotly_white'
-    )
-
-    return fig
-
-# Create correlation heatmap
-def create_correlation_heatmap(df, columns):
-    """Create a correlation heatmap for selected sensors"""
-    columns = [c for c in columns if not c.endswith("_pct_change")]
-    if len(columns) < 2:
-        return None
-
-    corr_df = df[columns].corr()
-    # Format correlation values to 4 decimal places
-    text_values = corr_df.round(4).values
-
-    fig = px.imshow(corr_df,
-                    text_auto=False,
-                    color_continuous_scale='RdBu_r',
-                    zmin=-1,
-                    zmax=1,
-                    title="Sensor Correlation Heatmap")
-
-    # Add custom text with 4 decimal places
-    fig.update_traces(text=text_values, texttemplate="%{text}", textfont_size=16)
-    fig.update_layout(height=400)
-
-    return fig
-
-
-# Alert System Functions
-def check_sensor_thresholds(df, thresholds):
-    """Check current sensor readings against defined thresholds"""
-    if df.empty or len(df) == 0:
-        return []
-
-    alerts = []
-    latest_row = df.iloc[-1]
-    current_time = datetime.now()
-
-    # Check CO2 sensors
-    co2_columns = [col for col in df.columns if col.startswith('CO2')]
-    for col in co2_columns:
-        value = latest_row[col]
-        if value < thresholds['co2']['min']:
-            alerts.append({
-                'sensor': col,
-                'message': f'CO2 level too low',
-                'current_value': value,
-                'threshold': thresholds['co2']['min'],
-                'severity': 'medium',
-                'timestamp': current_time
-            })
-        elif value > thresholds['co2']['max']:
-            alerts.append({
-                'sensor': col,
-                'message': f'CO2 level too high',
-                'current_value': value,
-                'threshold': thresholds['co2']['max'],
-                'severity': 'high',
-                'timestamp': current_time
-            })
-
-    # Check Temperature sensors
-    temp_columns = [col for col in df.columns if col.startswith('Temperature')]
-    for col in temp_columns:
-        value = latest_row[col]
-        if value < thresholds['temperature']['min']:
-            alerts.append({
-                'sensor': col,
-                'message': f'Temperature too low',
-                'current_value': value,
-                'threshold': thresholds['temperature']['min'],
-                'severity': 'high',
-                'timestamp': current_time
-            })
-        elif value > thresholds['temperature']['max']:
-            alerts.append({
-                'sensor': col,
-                'message': f'Temperature too high',
-                'current_value': value,
-                'threshold': thresholds['temperature']['max'],
-                'severity': 'high',
-                'timestamp': current_time
-            })
-
-    # Check Humidity sensors
-    humidity_columns = [col for col in df.columns if col.startswith('RH')]
-    for col in humidity_columns:
-        value = latest_row[col]
-        if value < thresholds['humidity']['min']:
-            alerts.append({
-                'sensor': col,
-                'message': f'Humidity too low',
-                'current_value': value,
-                'threshold': thresholds['humidity']['min'],
-                'severity': 'medium',
-                'timestamp': current_time
-            })
-        elif value > thresholds['humidity']['max']:
-            alerts.append({
-                'sensor': col,
-                'message': f'Humidity too high',
-                'current_value': value,
-                'threshold': thresholds['humidity']['max'],
-                'severity': 'medium',
-                'timestamp': current_time
-            })
-
-    # Check Battery voltage
-    if 'Battery_Volt' in df.columns:
-        value = latest_row['Battery_Volt']
-        if value < thresholds['battery']['min']:
-            alerts.append({
-                'sensor': 'Battery_Volt',
-                'message': f'Battery voltage low',
-                'current_value': value,
-                'threshold': thresholds['battery']['min'],
-                'severity': 'high',
-                'timestamp': current_time
-            })
-
-    return alerts
-
-
-# Load data based on user selection
-df_raw = load_experiment_data(
-    selected_experiment) if selected_experiment else pd.DataFrame()
-
-if not df_raw.empty:
-    # Apply data filtering
-    df = apply_data_filter(df_raw, filter_option, filter_params)
-
-    # Remove any temporary pct_change columns so they don't get plotted
-    df = df.drop(
-        columns=[c for c in df.columns if c.endswith("_pct_change")],
-        errors="ignore"
-    )
-
-    # Display data source info with filtering status
-    if filter_option == "No filter":
-        st.success(f"✅ Data loaded from: {selected_experiment}")
+# LOAD & FILTER DATA
+df_raw = load_experiment_data(selected_experiment) if selected_experiment else pd.DataFrame()
+df = apply_data_filter(df_raw, filter_option, filter_params) if not df_raw.empty else pd.DataFrame()
+
+st.sidebar.markdown("### 📅 Time Range Selection")
+if not df.empty:
+    min_ts, max_ts = df["timestamp"].min(), df["timestamp"].max()
+
+    start_date = st.sidebar.date_input("Start Date",
+                                       value=min_ts.date(),
+                                       min_value=min_ts.date(),
+                                       max_value=max_ts.date())
+    end_date   = st.sidebar.date_input("End Date",
+                                       value=max_ts.date(),
+                                       min_value=min_ts.date(),
+                                       max_value=max_ts.date())
+
+    start_time = st.sidebar.time_input("Start Time", value=min_ts.time())
+    end_time   = st.sidebar.time_input("End Time",   value=max_ts.time())
+
+    start_dt = pd.to_datetime(f"{start_date} {start_time}")
+    end_dt   = pd.to_datetime(f"{end_date}   {end_time}")
+
+    if start_dt <= end_dt:
+        df = df[(df["timestamp"] >= start_dt) & (df["timestamp"] <= end_dt)]
     else:
-        st.success(f"✅ Data loaded from: {selected_experiment}")
-        # Count individual sensor values that were filtered
-        sensor_columns = [col for col in df_raw.columns if col != 'timestamp']
-        total_values = len(df_raw) * len(sensor_columns)
-        filtered_values = 0
+        st.sidebar.error("Start must be before End")
+else:
+    st.sidebar.info("No data loaded yet")
 
-        for col in sensor_columns:
-            filtered_values += df[col].isna().sum()
-
-        replacement_method = filter_params.get('replacement_method', 'Fill with blank values')
-        method_text = "filled with blanks" if replacement_method == "Fill with blank values" else "replaced with averages"
-
-        st.info(
-            f"🔍 Filter applied: '{filter_option}' - {filtered_values} sensor values {method_text} ({filtered_values / total_values * 100:.1f}%)")
+if df.empty:
+    st.error("No data available…")
+else:
+    st.success(f"✅ Data loaded: {selected_experiment} ({len(df)} records)")
 
     # Main application interface
     st.markdown("---")
     st.markdown('<h3 style="color: #2E7D32;">📈 Soil Sense Data Analysis</h3>',
                 unsafe_allow_html=True)
 
-    # Display data info
-    st.write(f"📊 **Records**: {len(df)} (Original: {len(df_raw)})")
-    if 'timestamp' in df.columns and len(df) > 0:
-        st.write(
-            f"⏰ **Time Range**: {df['timestamp'].min().strftime('%Y-%m-%d %H:%M')} to {df['timestamp'].max().strftime('%Y-%m-%d %H:%M')}"
-        )
-
-    # Get sensor columns (all except timestamp)
-    sensor_columns = [col for col in df.columns if col != 'timestamp' and not col.endswith("_pct_change")]
 
     # Create 4 tabs for different visualizations
     viz_tab1, viz_tab2, viz_tab3, alert_tab = st.tabs(
         ["📈 Time Series", "📊 Statistics", "🔄 Correlations", "🚨 Alert System"])
 
     with viz_tab1:
-
-
         # Create separate plots by sensor type
         plots = create_sensor_plots(df)
 
