@@ -901,8 +901,9 @@ else:
                                 p_value = 1.0
 
                         # Future prediction
-                        future_x = x[-1] + prediction_hours
-                        future_pred = model.predict([[future_x]])[0]
+                        future_x = df_reg['hours'].max() + prediction_hours
+                        future_time = df_reg['timestamp'].max() + pd.Timedelta(hours=prediction_hours)
+                        future_pred = min(model.predict([[future_x]])[0],40000)
 
                     elif regression_type == "Exponential":
                         # Exponential regression (log transform)
@@ -920,7 +921,7 @@ else:
                         equation = f"CO₂ = {np.exp(intercept):.4f} * e^({slope:.4f}t)"
 
                         # Future prediction
-                        future_x = x[-1] + prediction_hours
+                        future_x = df_reg['hours'].max() + prediction_hours
                         future_log_pred = model.predict([[future_x]])[0]
                         future_pred = np.exp(future_log_pred)
 
@@ -940,7 +941,7 @@ else:
                         equation = f"CO₂ = {slope:.4f} * ln(t+1) + {intercept:.2f}"
 
                         # Future prediction
-                        future_x = x[-1] + prediction_hours
+                        future_x = df_reg['hours'].max() + prediction_hours
                         future_log_x = np.log(max(future_x, 0.1) + 1)
                         future_pred = model.predict([[future_log_x]])[0]
 
