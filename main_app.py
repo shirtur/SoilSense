@@ -963,7 +963,7 @@ else:
                                    marker=dict(color='blue', size=4)))
 
                     # Add prediction point
-                    future_time = df_reg['timestamp'].iloc[-1] + pd.Timedelta(hours=prediction_hours)
+                    future_time = df_reg['timestamp'].max() + pd.Timedelta(hours=prediction_hours)
                     fig_reg.add_trace(
                         go.Scatter(x=[future_time],
                                    y=[future_pred],
@@ -972,8 +972,8 @@ else:
                                    marker=dict(color='orange', size=12, symbol='star'))
                     )
                     # Extended regression line through prediction
-                    timestamps_ext = list(df_reg['timestamp']) + [future_time]
-                    y_pred_ext = list(y_pred) + [future_pred]
+                    timestamps_ext = df_reg['timestamp'].tolist() + [future_time]
+                    y_pred_ext = y_pred.tolist() + [future_pred]
                     fig_reg.add_trace(
                         go.Scatter(
                             x=timestamps_ext,
@@ -1044,7 +1044,21 @@ else:
 
                     # Model Comparison Section
                     st.subheader("📊 Model Comparison")
+                    # ─── Restrict to the sidebar time‐window ────────────────────────────────────
+                    df_window = df.loc[
+                        (df['timestamp'] >= start_dt) &
+                        (df['timestamp'] <= end_dt)
+                        ].copy()
 
+                    # drop any NaNs and compute “hours since start of this window”
+                    df_window = df_window[['timestamp', selected_co2_sensor]].dropna()
+                    df_window['hours'] = (
+                                                 df_window['timestamp'] - df_window['timestamp'].min()
+                                         ).dt.total_seconds() / 3600
+
+                    # build your feature & target arrays from the sliced data
+                    x = df_window['hours'].values
+                    y = np.minimum(df_window[selected_co2_sensor].values, 40000)
                     # Run all three models for comparison
                     comparison_results = {}
 
