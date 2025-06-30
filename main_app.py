@@ -23,7 +23,7 @@ def _ensure_folder_downloaded(folder_id: str) -> str:
     if not os.path.isdir(tmp_dir):
         os.makedirs(tmp_dir, exist_ok=True)
         # downloads every file in that folder
-        gdown.download_folder(id=folder_id, output=tmp_dir, use_cookies=False)
+        gdown.download_folder(id=folder_id, output=tmp_dir, use_cookies=True,quiet=False)
     return tmp_dir
 
 def get_available_experiments() -> list[str]:
