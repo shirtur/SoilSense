@@ -847,8 +847,11 @@ else:
 
             if selected_co2_sensor and len(df) >= 10:
                 # Prepare data for regression
-                df_reg = df[['timestamp', selected_co2_sensor]].copy()
-                df_reg = df_reg.dropna()
+                df_time = df.loc[
+                    (df['timestamp'] >= start_dt) &
+                    (df['timestamp'] <= end_dt)
+                    ]
+                df_reg = df_time[['timestamp', selected_co2_sensor]].dropna().copy()
 
                 # Convert timestamps to numeric values (hours from start)
                 df_reg['hours'] = (
