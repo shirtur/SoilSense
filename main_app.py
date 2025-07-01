@@ -884,7 +884,6 @@ else:
                         X = x.reshape(-1, 1)
                         model.fit(X, y)
                         y_pred = model.predict(X)
-                        y_pred = np.minimum(y_pred, 40000)  # Apply constraint
 
                         # Calculate statistics
                         slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
@@ -903,7 +902,7 @@ else:
                         # Future prediction
                         future_x = df_reg['hours'].max() + prediction_hours
                         future_time = df_reg['timestamp'].max() + pd.Timedelta(hours=prediction_hours)
-                        future_pred = min(model.predict([[future_x]])[0],40000)
+                        future_pred = model.predict([[future_x]])[0]
 
                     elif regression_type == "Exponential":
                         # Exponential regression (log transform)
@@ -914,7 +913,6 @@ else:
                         model.fit(X, log_y)
                         log_y_pred = model.predict(X)
                         y_pred = np.exp(log_y_pred)
-                        y_pred = np.minimum(y_pred, 40000)  # Apply constraint
 
                         # Calculate statistics for exponential fit
                         slope, intercept, r_value, p_value, std_err = stats.linregress(x, log_y)
@@ -934,7 +932,6 @@ else:
                         X = log_x.reshape(-1, 1)
                         model.fit(X, y)
                         y_pred = model.predict(X)
-                        y_pred = np.minimum(y_pred, 40000)  # Apply constraint
 
                         # Calculate statistics for logarithmic fit
                         slope, intercept, r_value, p_value, std_err = stats.linregress(log_x, y)
@@ -945,8 +942,6 @@ else:
                         future_log_x = np.log(max(future_x, 0.1) + 1)
                         future_pred = model.predict([[future_log_x]])[0]
 
-                    # Apply constraint to future prediction
-                    future_pred = min(future_pred, 40000)
 
                     # Calculate R-squared
                     r2 = r2_score(y, y_pred)
