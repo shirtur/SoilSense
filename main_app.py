@@ -538,59 +538,6 @@ st.markdown(
     '<p class="sub-header">🌱 Agricultural Sensor Data Monitoring Platform</p>',
     unsafe_allow_html=True)
 
-#
-# # Get available experiment files
-# def get_available_experiments():
-#     """Get list of available experiment files"""
-#     experiments = []
-#
-#     # Check for available TXT files in attached_assets
-#     import os
-#
-#     # Try different possible paths (local vs cloud environment)
-#
-#     possible_paths = [
-#         #"C:/Users/USER001/Desktop/SoilSense/attached_assets",  # Your local path
-#         "./attached_assets",  # Cloud/Git environment
-#         "attached_assets",  # Alternative cloud path
-#     ]
-#
-#     assets_path = None
-#     for path in possible_paths:
-#         if os.path.exists(path):
-#             assets_path = path
-#             break
-#
-#     if assets_path:
-#         # Look for Experiment files specifically (Experiment1 to Experiment7)
-#         for i in range(1, 8):  # Experiment1 through Experiment7
-#             filename_txt = f"Experiment{i}.txt"
-#             filename_TXT = f"Experiment{i}.TXT"
-#
-#             file_path = None
-#             if os.path.exists(os.path.join(assets_path, filename_txt)):
-#                 file_path = os.path.join(assets_path, filename_txt)
-#             elif os.path.exists(os.path.join(assets_path, filename_TXT)):
-#                 file_path = os.path.join(assets_path, filename_TXT)
-#
-#             if file_path:
-#                 try:
-#                     with open(file_path, 'r') as f:
-#                         content = f.read().strip()
-#                         # Check if file has content and contains timestamp data
-#                         if content and ('/' in content or ':' in content):
-#                             experiments.append(f"Experiment{i}")
-#                 except:
-#                     continue
-#
-#     # Sort from newest to oldest (7, 6, 5, 4, 3, 2, 1)
-#     experiments.sort(key=lambda x: int(x.replace('Experiment', '')),
-#                      reverse=True)
-#
-#     return experiments
-#
-
-
 # Sidebar for experiment selection and data filtering
 with st.sidebar:
     st.markdown("### 📊 Data Source")
@@ -1033,9 +980,6 @@ else:
                         p_interpretation = "Not statistically significant (p ≥ 0.05)"
 
                     st.write(f"**Statistical Significance:** {p_interpretation}")
-
-                    if future_pred >= 40000:
-                        st.warning("⚠️ Predicted CO2 level reaches the maximum constraint (40,000 ppm)")
 
                     # Model Comparison Section
                     st.subheader("📊 Model Comparison")
