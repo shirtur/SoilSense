@@ -806,7 +806,7 @@ else:
                                           df_reg['timestamp'].min()).dt.total_seconds() / 3600
 
                 x = df_reg['hours'].values
-                y = df_reg['hours'].values
+                y = df_reg[selected_co2_sensor].values
 
                 # Prediction settings
                 st.write("**Prediction Settings**")
