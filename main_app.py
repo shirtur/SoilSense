@@ -792,7 +792,8 @@ else:
                 "Select regression type:",
                 ["Linear", "Exponential", "Logarithmic"])
 
-            if selected_co2_sensor and len(df) >= 10:
+            #if selected_co2_sensor and len(df) >= 10:
+            if selected_co2_sensor:
                 # Prepare data for regression
                 df_time = df.loc[
                     (df['timestamp'] >= start_dt) &
